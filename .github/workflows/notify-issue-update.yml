@@ -1,0 +1,69 @@
+name: Notify reporter on issue update
+
+on:
+  issues:
+    types: [labeled, commented, closed, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract reporter email from issue body
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue?.body ?? '';
+            const match = body.match(/\*\*Submitted by:\*\*[^\(]*\(([^)]+)\)/);
+            const email = match?.[1]?.trim();
+            if (!email || email === 'unknown') {
+              core.setOutput('skip', 'true');
+              return;
+            }
+            core.setOutput('skip', 'false');
+            core.setOutput('email', email);
+            core.setOutput('issue_number', String(context.payload.issue.number));
+            core.setOutput('issue_title', context.payload.issue.title);
+            core.setOutput('issue_url', context.payload.issue.html_url);
+
+            const event = context.eventName === 'issue_comment' ? 'comment' : context.payload.action;
+            const labels = { commented: 'New comment', labeled: 'Labeled', closed: 'Closed', reopened: 'Reopened', comment: 'New comment' };
+            core.setOutput('event_label', labels[event] ?? event);
+
+            const commenter = context.payload.comment?.user?.login ?? context.payload.sender?.login ?? 'team';
+            const commentBody = context.payload.comment?.body ?? '';
+            core.setOutput('commenter', commenter);
+            core.setOutput('comment_body', commentBody.slice(0, 500));
+
+      - name: Send notification email
+        if: steps.parse.outputs.skip != 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          secure: ${{ secrets.SMTP_SECURE }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          from: ApexMCP <${{ secrets.EMAIL_FROM }}>
+          to: ${{ steps.parse.outputs.email }}
+          subject: "[${{ steps.parse.outputs.event_label }}] Issue #${{ steps.parse.outputs.issue_number }}: ${{ steps.parse.outputs.issue_title }}"
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #111;">
+              <h2 style="margin-bottom: 4px;">${{ steps.parse.outputs.event_label }} on your issue</h2>
+              <p style="color: #666; margin-top: 0;">ApexMCP Community — Issue #${{ steps.parse.outputs.issue_number }}</p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="font-weight: 500;">${{ steps.parse.outputs.issue_title }}</p>
+              ${{ steps.parse.outputs.comment_body != '' && format('<p style="background:#f8f8f8;border-left:3px solid #000;padding:10px 14px;border-radius:0 6px 6px 0;font-size:14px;white-space:pre-wrap;">{0}</p><p style="color:#666;font-size:13px;">— {1}</p>', steps.parse.outputs.comment_body, steps.parse.outputs.commenter) || '' }}
+              <p style="margin: 24px 0;">
+                <a href="${{ steps.parse.outputs.issue_url }}" style="background: #000; color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 500;">
+                  View Issue #${{ steps.parse.outputs.issue_number }}
+                </a>
+              </p>
+              <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+              <p style="color: #999; font-size: 12px;">ApexMCP · <a href="https://apexmcp.io" style="color: #999;">apexmcp.io</a></p>
+            </body>
+            </html>
